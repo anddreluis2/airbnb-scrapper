@@ -1,0 +1,29 @@
+{
+  "name": "airbnb-scrap",
+  "version": "1.0.0",
+  "description": "Scraper de listings do Airbnb para 'Espaço Inteiro' no Centro de Curitiba",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "airbnb",
+    "scraper",
+    "curitiba",
+    "playwright"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "playwright": "^1.40.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.5",
+    "typescript": "^5.3.3"
+  }
+}
