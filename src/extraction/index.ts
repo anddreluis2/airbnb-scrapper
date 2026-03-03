@@ -1,5 +1,6 @@
 export {
   extractListingUrls,
+  extractResultCount,
   extractTotalPages,
   hasNextPage,
   extractNextCursor,

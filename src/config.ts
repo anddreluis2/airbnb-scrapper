@@ -1,3 +1,28 @@
+import { PriceSegment } from './types.js';
+
+function parsePriceSegments(): PriceSegment[] {
+  const envSegments = process.env.PRICE_SEGMENTS;
+  if (envSegments) {
+    try {
+      return JSON.parse(envSegments);
+    } catch {
+      console.warn('PRICE_SEGMENTS inválido, usando segmentos padrão');
+    }
+  }
+
+  return [
+    { min: 0, max: 100 },
+    { min: 100, max: 150 },
+    { min: 150, max: 200 },
+    { min: 200, max: 300 },
+    { min: 300, max: 500 },
+    { min: 500, max: 800 },
+    { min: 800, max: 1500 },
+    { min: 1500, max: 3000 },
+    { min: 3000 },
+  ];
+}
+
 export const CONFIG = {
   airbnb: {
     baseUrl: 'https://www.airbnb.com.br',
@@ -49,7 +74,7 @@ export const CONFIG = {
   },
 
   pagination: {
-    maxPages: parseInt(process.env.MAX_PAGES || '5'),
+    maxPages: parseInt(process.env.MAX_PAGES || '15'),
   },
 
   retry: {
@@ -72,14 +97,28 @@ export const CONFIG = {
   timeouts: {
     navigation: 30000,
   },
+
+  priceSegments: parsePriceSegments(),
 };
 
-export function getSearchUrl(pageNum?: number, cursor?: string): string {
+export function getSearchUrl(
+  pageNum?: number,
+  cursor?: string,
+  priceMin?: number,
+  priceMax?: number,
+): string {
   const url = new URL(CONFIG.airbnb.searchUrl);
 
   Object.entries(CONFIG.airbnb.searchParams).forEach(([key, value]) => {
     url.searchParams.append(key, value);
   });
+
+  if (priceMin !== undefined) {
+    url.searchParams.set('price_min', String(priceMin));
+  }
+  if (priceMax !== undefined) {
+    url.searchParams.set('price_max', String(priceMax));
+  }
 
   if (cursor) {
     url.searchParams.set('cursor', cursor);

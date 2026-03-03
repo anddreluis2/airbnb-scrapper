@@ -1,6 +1,28 @@
 import { Page } from 'playwright';
 import { CONFIG } from '../config.js';
 
+export async function extractResultCount(page: Page): Promise<string | null> {
+  try {
+    return await page.evaluate(() => {
+      const headings = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"]'));
+      for (let i = 0; i < headings.length; i++) {
+        const text = headings[i].textContent?.trim() || '';
+        if (
+          text.includes('acomodaç') ||
+          text.includes('acomodação') ||
+          text.includes('places') ||
+          text.includes('accommodation')
+        ) {
+          return text;
+        }
+      }
+      return null;
+    });
+  } catch {
+    return null;
+  }
+}
+
 export async function extractListingUrls(page: Page): Promise<string[]> {
   const urls = await page.evaluate((selector) => {
     const links = document.querySelectorAll<HTMLAnchorElement>(selector);

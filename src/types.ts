@@ -12,6 +12,8 @@ export interface ScraperStats {
   successfulExtractions: number;
   failedExtractions: number;
   totalPages: number;
+  totalSegments: number;
+  uniqueUrls: number;
 }
 
 export interface BrowserConfig {
@@ -24,4 +26,9 @@ export interface RetryConfig {
   initialDelay: number;
   maxDelay: number;
   multiplier: number;
+}
+
+export interface PriceSegment {
+  min: number;
+  max?: number;
 }
