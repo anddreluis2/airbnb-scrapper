@@ -13,8 +13,16 @@ import { withRetry } from './utils/retry.js';
 import { CONFIG, getSearchUrl } from './config.js';
 import { ScraperStats, ListingData, PriceSegment } from './types.js';
 
-const MAX_LISTINGS_PER_SEGMENT = 270;
-const MAX_SUBDIVISION_DEPTH = 6;
+interface SegmentFirstPageResult {
+  resultCount: number | null;
+  urls: string[];
+}
+
+interface PaginatedCollectionResult {
+  urls: string[];
+  pagesProcessed: number;
+  reachedLimit: boolean;
+}
 
 export class AirbnbScraper {
   private browser: Browser | null = null;
@@ -110,14 +118,14 @@ export class AirbnbScraper {
 
   private canSubdivide(segment: PriceSegment): boolean {
     if (segment.max === undefined) return false;
-    return segment.max - segment.min > 3;
+    return segment.max - segment.min > CONFIG.segmentation.minSubdivisionRange;
   }
 
   private subdivideSegment(segment: PriceSegment): PriceSegment[] {
     if (segment.max === undefined) return [segment];
 
     const range = segment.max - segment.min;
-    const parts = range > 40 ? 3 : 2;
+    const parts = range > CONFIG.segmentation.subdivisionThreshold ? 3 : 2;
     const step = Math.floor(range / parts);
 
     const subSegments: PriceSegment[] = [];
@@ -130,6 +138,135 @@ export class AirbnbScraper {
     return subSegments;
   }
 
+  private shouldSubdivide(
+    count: number | null,
+    segment: PriceSegment,
+    depth: number,
+  ): boolean {
+    return (
+      count !== null &&
+      count > CONFIG.segmentation.maxListingsPerSegment &&
+      this.canSubdivide(segment) &&
+      depth < CONFIG.segmentation.maxSubdivisionDepth
+    );
+  }
+
+  private computeEffectiveMaxPages(count: number | null): number {
+    if (count !== null && count <= CONFIG.segmentation.maxListingsPerSegment) {
+      const estimated = Math.ceil(count / CONFIG.pagination.listingsPerPage) + 2;
+      return Math.min(estimated, CONFIG.pagination.maxPages);
+    }
+    return CONFIG.pagination.maxPages;
+  }
+
+  private async loadSegmentFirstPage(
+    page: Page,
+    segment: PriceSegment,
+    indent: string,
+  ): Promise<SegmentFirstPageResult | null> {
+    const searchUrl = getSearchUrl(1, undefined, segment.min, segment.max);
+    await page.goto(searchUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: CONFIG.timeouts.navigation,
+    });
+
+    await randomDelay(CONFIG.delays.pageLoad.min, CONFIG.delays.pageLoad.max);
+    await humanizedScroll(page);
+
+    const resultText = await extractResultCount(page);
+    const resultCount = this.parseResultCount(resultText);
+    if (resultText) {
+      const cleanText = resultText.replace(/\n/g, ' ').trim();
+      console.log(`${indent}  Resultados: ${cleanText}`);
+    }
+
+    const urls = await extractListingUrls(page);
+    console.log(`${indent}  Página 1: ${urls.length} listings`);
+
+    if (urls.length === 0) {
+      console.log(`${indent}  Nenhum resultado, pulando segmento`);
+      return null;
+    }
+
+    return { resultCount, urls };
+  }
+
+  private async awaitPaginationElement(page: Page): Promise<boolean> {
+    try {
+      await page.waitForSelector(CONFIG.selectors.pagination.nextButton, {
+        timeout: CONFIG.timeouts.paginationWait,
+        state: 'attached',
+      });
+    } catch {
+      // no pagination element found
+    }
+    return hasNextPage(page);
+  }
+
+  private async collectPaginatedUrls(
+    page: Page,
+    segment: PriceSegment,
+    effectiveMaxPages: number,
+    indent: string,
+  ): Promise<PaginatedCollectionResult> {
+    const urls: string[] = [];
+    let pageNum = 1;
+    let successfulExtraPages = 0;
+
+    await scrollToBottom(page);
+    await randomDelay(CONFIG.delays.scrollSettle.min, CONFIG.delays.scrollSettle.max);
+
+    let hasMore = await this.awaitPaginationElement(page);
+
+    while (hasMore && pageNum < effectiveMaxPages) {
+      const cursor = await extractNextCursor(page);
+      pageNum++;
+
+      const nextUrl = getSearchUrl(
+        pageNum,
+        cursor || undefined,
+        segment.min,
+        segment.max,
+      );
+
+      try {
+        await page.goto(nextUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: CONFIG.timeouts.navigation,
+        });
+
+        await randomDelay(CONFIG.delays.pageLoad.min, CONFIG.delays.pageLoad.max);
+        await humanizedScroll(page);
+
+        const pageUrls = await extractListingUrls(page);
+        console.log(`${indent}  Página ${pageNum}: ${pageUrls.length} listings`);
+
+        if (pageUrls.length === 0) break;
+
+        urls.push(...pageUrls);
+        successfulExtraPages++;
+
+        await scrollToBottom(page);
+        await randomDelay(CONFIG.delays.scrollSettle.min, CONFIG.delays.scrollSettle.max);
+
+        hasMore = await this.awaitPaginationElement(page);
+
+        if (hasMore && pageNum < effectiveMaxPages) {
+          await randomDelay(CONFIG.delays.search.min, CONFIG.delays.search.max);
+        }
+      } catch (error) {
+        console.error(`${indent}  Erro na página ${pageNum}:`, error);
+        break;
+      }
+    }
+
+    return {
+      urls,
+      pagesProcessed: successfulExtraPages,
+      reachedLimit: hasMore && pageNum >= effectiveMaxPages,
+    };
+  }
+
   private async collectAllListingUrls(): Promise<void> {
     const segments = CONFIG.priceSegments;
 
@@ -137,7 +274,7 @@ export class AirbnbScraper {
     console.log(`BUSCA ADAPTATIVA POR FAIXA DE PREÇO`);
     console.log(`Segmentos iniciais: ${segments.length}`);
     console.log(`Máximo de páginas por segmento: ${CONFIG.pagination.maxPages}`);
-    console.log(`Subdivisão automática para segmentos com >${MAX_LISTINGS_PER_SEGMENT} resultados`);
+    console.log(`Subdivisão automática para segmentos com >${CONFIG.segmentation.maxListingsPerSegment} resultados`);
     console.log(`${'='.repeat(60)}`);
 
     for (const segment of segments) {
@@ -163,39 +300,15 @@ export class AirbnbScraper {
     const page = await createPage(this.context);
 
     try {
-      const searchUrl = getSearchUrl(1, undefined, segment.min, segment.max);
-      await page.goto(searchUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: CONFIG.timeouts.navigation,
-      });
+      const firstPage = await this.loadSegmentFirstPage(page, segment, indent);
+      if (!firstPage) return;
 
-      await randomDelay(1500, 2500);
-      await humanizedScroll(page);
+      const { resultCount, urls: page1Urls } = firstPage;
 
-      const resultText = await extractResultCount(page);
-      const count = this.parseResultCount(resultText);
-      if (resultText) {
-        const cleanText = resultText.replace(/\n/g, ' ').trim();
-        console.log(`${indent}  Resultados: ${cleanText}`);
-      }
-
-      const page1Urls = await extractListingUrls(page);
-      console.log(`${indent}  Página 1: ${page1Urls.length} listings`);
-
-      if (page1Urls.length === 0) {
-        console.log(`${indent}  Nenhum resultado, pulando segmento`);
-        return;
-      }
-
-      if (
-        count !== null &&
-        count > MAX_LISTINGS_PER_SEGMENT &&
-        this.canSubdivide(segment) &&
-        depth < MAX_SUBDIVISION_DEPTH
-      ) {
+      if (this.shouldSubdivide(resultCount, segment, depth)) {
         const subSegments = this.subdivideSegment(segment);
         const subLabels = subSegments.map((s) => this.getSegmentLabel(s)).join(', ');
-        console.log(`${indent}  → ${count} resultados excedem o limite. Subdividindo em: ${subLabels}`);
+        console.log(`${indent}  → ${resultCount} resultados excedem o limite. Subdividindo em: ${subLabels}`);
         await page.close();
 
         for (const sub of subSegments) {
@@ -205,81 +318,12 @@ export class AirbnbScraper {
         return;
       }
 
-      const segmentUrls: string[] = [...page1Urls];
-      this.stats.totalPages++;
+      const effectiveMaxPages = this.computeEffectiveMaxPages(resultCount);
 
-      let effectiveMaxPages = CONFIG.pagination.maxPages;
-      if (count !== null && count <= MAX_LISTINGS_PER_SEGMENT) {
-        effectiveMaxPages = Math.min(Math.ceil(count / 18) + 2, CONFIG.pagination.maxPages);
-      }
+      const paginated = await this.collectPaginatedUrls(page, segment, effectiveMaxPages, indent);
 
-      await scrollToBottom(page);
-      await randomDelay(800, 1500);
-
-      let pageNum = 1;
-      let cursor: string | null = null;
-
-      try {
-        await page.waitForSelector(CONFIG.selectors.pagination.nextButton, {
-          timeout: 10000,
-          state: 'attached',
-        });
-      } catch {
-        // no pagination
-      }
-
-      let hasMore = await hasNextPage(page);
-
-      while (hasMore && pageNum < effectiveMaxPages) {
-        cursor = await extractNextCursor(page);
-        pageNum++;
-
-        const nextUrl = getSearchUrl(
-          pageNum,
-          cursor || undefined,
-          segment.min,
-          segment.max,
-        );
-
-        try {
-          await page.goto(nextUrl, {
-            waitUntil: 'domcontentloaded',
-            timeout: CONFIG.timeouts.navigation,
-          });
-
-          await randomDelay(1500, 2500);
-          await humanizedScroll(page);
-
-          const pageUrls = await extractListingUrls(page);
-          console.log(`${indent}  Página ${pageNum}: ${pageUrls.length} listings`);
-
-          if (pageUrls.length === 0) break;
-
-          segmentUrls.push(...pageUrls);
-          this.stats.totalPages++;
-
-          await scrollToBottom(page);
-          await randomDelay(800, 1500);
-
-          try {
-            await page.waitForSelector(CONFIG.selectors.pagination.nextButton, {
-              timeout: 10000,
-              state: 'attached',
-            });
-          } catch {
-            // no pagination
-          }
-
-          hasMore = await hasNextPage(page);
-
-          if (hasMore && pageNum < effectiveMaxPages) {
-            await randomDelay(CONFIG.delays.search.min, CONFIG.delays.search.max);
-          }
-        } catch (error) {
-          console.error(`${indent}  Erro na página ${pageNum}:`, error);
-          break;
-        }
-      }
+      const segmentUrls = [...page1Urls, ...paginated.urls];
+      this.stats.totalPages += 1 + paginated.pagesProcessed;
 
       const newUrls = segmentUrls.filter((url) => !this.allUrlsSet.has(url));
       for (const url of segmentUrls) {
@@ -291,7 +335,7 @@ export class AirbnbScraper {
         `${indent}[SEGMENTO] ${segmentUrls.length} URLs, ${newUrls.length} novas (total: ${this.allUrlsSet.size})`,
       );
 
-      if (hasMore && pageNum >= effectiveMaxPages) {
+      if (paginated.reachedLimit) {
         console.log(
           `${indent}  ⚠ Atingiu limite de ${effectiveMaxPages} páginas para ${label}`,
         );
@@ -358,7 +402,7 @@ export class AirbnbScraper {
       timeout: CONFIG.timeouts.navigation,
     });
 
-    await randomDelay(800, 1500);
+    await randomDelay(CONFIG.delays.scrollSettle.min, CONFIG.delays.scrollSettle.max);
     await humanizedScroll(page);
 
     return extractListingData(page, url);

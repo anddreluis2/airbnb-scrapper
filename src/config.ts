@@ -66,6 +66,8 @@ export const CONFIG = {
       min: parseInt(process.env.LISTING_DELAY_MIN || '3000'),
       max: parseInt(process.env.LISTING_DELAY_MAX || '6000'),
     },
+    pageLoad: { min: 1500, max: 2500 },
+    scrollSettle: { min: 800, max: 1500 },
     retryBackoff: {
       initialDelay: 30000,
       maxDelay: 60000,
@@ -75,6 +77,14 @@ export const CONFIG = {
 
   pagination: {
     maxPages: parseInt(process.env.MAX_PAGES || '15'),
+    listingsPerPage: 18,
+  },
+
+  segmentation: {
+    maxListingsPerSegment: 270,
+    maxSubdivisionDepth: 6,
+    minSubdivisionRange: 3,
+    subdivisionThreshold: 40,
   },
 
   retry: {
@@ -96,6 +106,7 @@ export const CONFIG = {
 
   timeouts: {
     navigation: 30000,
+    paginationWait: 10000,
   },
 
   priceSegments: parsePriceSegments(),
