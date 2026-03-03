@@ -60,46 +60,40 @@ src/
     retry.ts                  # Retry genérico com backoff exponencial
 ```
 
-## Fluxo de Execução
+## Fluxograma da Busca (versao nao tecnica)
+
+Este diagrama descreve o processo de busca de anuncios em linguagem simples, pensado para leitores nao tecnicos.
 
 ```mermaid
 flowchart TD
-    A[index.ts - main] --> B[scraper.ts - run]
+    A[Inicio da coleta] --> B[Abre o Airbnb e faz aquecimento da navegacao]
+    B --> C[Define faixas iniciais de preco]
+    C --> D[Seleciona uma faixa de preco]
+    D --> E[Abre a pagina de resultados da faixa]
+    E --> F[Conta quantos anuncios existem]
+    F --> G{Ha anuncios?}
 
-    B --> C[init]
-    C --> C1[launcher.ts - initBrowser]
-    C1 --> C2[launcher.ts - createContext]
+    G -- Nao --> H[Ignora a faixa e vai para a proxima]
+    H --> I{Ainda existem faixas para processar?}
 
-    B --> D[warmup]
-    D --> D1[launcher.ts - createPage]
-    D1 --> D2[Navigate to homepage]
-    D2 --> D3[stealth.ts - randomDelay + humanizedScroll]
-    D3 --> D4[Page closed - cookies saved]
+    G -- Sim --> J{Quantidade muito alta de anuncios?}
+    J -- Sim --> K[Divide a faixa em subfaixas menores]
+    K --> D
 
-    B --> E[searchAndCollect]
-    E --> E1[Loop: page 1 to MAX_PAGES]
-    E1 --> E2[config.ts - getSearchUrl]
-    E2 --> E3[Navigate to search URL]
-    E3 --> E4[stealth.ts - randomDelay + humanizedScroll]
-    E4 --> E5[search.ts - extractListingUrls]
-    E5 --> E6[search.ts - extractTotalPages]
-    E6 --> E7[search.ts - hasNextPage + extractNextCursor]
-    E7 -->|has more| E1
-    E7 -->|done| F
+    J -- Nao --> L[Coleta links dos anuncios da pagina]
+    L --> M{Existe proxima pagina e o limite de paginas nao foi atingido?}
+    M -- Sim --> N[Avanca para a proxima pagina e coleta novos links]
+    N --> L
+    M -- Nao --> O[Consolida os links da faixa]
 
-    F[visitAndExtract] --> F1[Loop: each unique listing URL]
-    F1 --> F2[retry.ts - withRetry wraps visitListing]
-    F2 --> F3[Navigate to listing URL]
-    F3 --> F4[stealth.ts - randomDelay + humanizedScroll]
-    F4 --> F5[listing.ts - extractListingData]
-    F5 --> F6[coordinates.ts - extractMapCoordinates]
-    F6 --> F7[csv-writer.ts - appendRow]
-    F7 --> F8[stealth.ts - randomDelay]
-    F8 --> F1
+    O --> I
+    I -- Sim --> D
+    I -- Nao --> P[Remove links duplicados e mantem apenas anuncios unicos]
 
-    F1 -->|all done| G[printStats]
-    G --> H[close - shut down browser]
-    H --> I[process.exit]
+    P --> Q[Visita cada anuncio unico]
+    Q --> R[Extrai dados principais: titulo, localizacao, coordenadas e data]
+    R --> S[Salva os dados em CSV]
+    S --> T[Fim]
 ```
 
 ## Output
