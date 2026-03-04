@@ -86,4 +86,22 @@ export class CSVWriter {
     const lines = content.trim().split('\n');
     return Math.max(0, lines.length - 1);
   }
+
+  loadExistingIds(): Set<string> {
+    const ids = new Set<string>();
+    if (!existsSync(this.filePath)) return ids;
+
+    const content = readFileSync(this.filePath, 'utf-8');
+    const lines = content.trim().split('\n');
+    const idIndex = CONFIG.output.headers.indexOf('listing_id');
+    if (idIndex === -1) return ids;
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',');
+      const id = cols[idIndex]?.replace(/^"|"$/g, '').trim();
+      if (id) ids.add(id);
+    }
+
+    return ids;
+  }
 }

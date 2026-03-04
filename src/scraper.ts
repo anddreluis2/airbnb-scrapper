@@ -4,6 +4,7 @@ import { randomDelay, humanizedScroll, scrollToBottom } from './browser/stealth.
 import {
   extractListingUrls,
   extractListingData,
+  extractListingIdFromUrl,
   extractResultCount,
   hasNextPage,
   extractNextCursor,
@@ -28,7 +29,8 @@ export class AirbnbScraper {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
   private csvWriter: CSVWriter;
-  private allUrlsSet = new Set<string>();
+  private collectedById = new Map<string, string>();
+  private scrapedIds: Set<string>;
   private segmentIndex = 0;
   private stats: ScraperStats = {
     totalListings: 0,
@@ -41,6 +43,10 @@ export class AirbnbScraper {
 
   constructor() {
     this.csvWriter = new CSVWriter();
+    this.scrapedIds = this.csvWriter.loadExistingIds();
+    if (this.scrapedIds.size > 0) {
+      console.log(`[RESUME] ${this.scrapedIds.size} listings já extraídos encontrados no CSV, serão ignorados`);
+    }
   }
 
   async run(): Promise<void> {
@@ -49,10 +55,18 @@ export class AirbnbScraper {
       await this.warmup();
 
       await this.collectAllListingUrls();
-      this.stats.uniqueUrls = this.allUrlsSet.size;
 
-      const uniqueUrls = Array.from(this.allUrlsSet);
-      await this.visitAndExtract(uniqueUrls);
+      const pendingUrls = Array.from(this.collectedById.entries())
+        .filter(([id]) => !this.scrapedIds.has(id))
+        .map(([, url]) => url);
+
+      this.stats.uniqueUrls = this.collectedById.size;
+      const skipped = this.collectedById.size - pendingUrls.length;
+      if (skipped > 0) {
+        console.log(`[DEDUP] ${skipped} listings já extraídos, ${pendingUrls.length} pendentes`);
+      }
+
+      await this.visitAndExtract(pendingUrls);
       this.printStats();
     } catch (error) {
       console.error('Erro fatal durante o scraping:', error);
@@ -74,9 +88,33 @@ export class AirbnbScraper {
   }
 
   private async close(): Promise<void> {
-    if (this.context) await this.context.close();
-    if (this.browser) await this.browser.close();
+    try { if (this.context) await this.context.close(); } catch { /* already dead */ }
+    try { if (this.browser) await this.browser.close(); } catch { /* already dead */ }
+    this.context = null;
+    this.browser = null;
     console.log('Navegador fechado');
+  }
+
+  private isBrowserDead(error: unknown): boolean {
+    const msg = error instanceof Error ? error.message : String(error);
+    return (
+      msg.includes('Target closed') ||
+      msg.includes('browser has been closed') ||
+      msg.includes('Browser closed') ||
+      msg.includes('Connection closed') ||
+      msg.includes('Browser has been disconnected') ||
+      msg.includes('Protocol error')
+    );
+  }
+
+  private async ensureBrowser(): Promise<void> {
+    if (this.browser?.isConnected() && this.context) return;
+
+    console.log('\n[RECOVERY] Navegador morto, reinicializando...');
+    await this.close();
+    await this.init();
+    await randomDelay(2000, 4000);
+    console.log('[RECOVERY] Navegador restaurado');
   }
 
   private async warmup(): Promise<void> {
@@ -278,12 +316,21 @@ export class AirbnbScraper {
     console.log(`${'='.repeat(60)}`);
 
     for (const segment of segments) {
-      await this.processSegmentAdaptive(segment, 0);
+      try {
+        await this.ensureBrowser();
+        await this.processSegmentAdaptive(segment, 0);
+      } catch (error) {
+        const label = this.getSegmentLabel(segment);
+        console.error(`[ERRO] Falha no segmento ${label}, continuando:`, error);
+        if (this.isBrowserDead(error)) {
+          await this.ensureBrowser();
+        }
+      }
     }
 
     console.log(`\n${'='.repeat(60)}`);
     console.log(`RESULTADO DA BUSCA`);
-    console.log(`Total de URLs únicas coletadas: ${this.allUrlsSet.size}`);
+    console.log(`Total de URLs únicas coletadas: ${this.collectedById.size}`);
     console.log(`Segmentos processados: ${this.stats.totalSegments}`);
     console.log(`Páginas de busca processadas: ${this.stats.totalPages}`);
     console.log(`${'='.repeat(60)}`);
@@ -325,14 +372,18 @@ export class AirbnbScraper {
       const segmentUrls = [...page1Urls, ...paginated.urls];
       this.stats.totalPages += 1 + paginated.pagesProcessed;
 
-      const newUrls = segmentUrls.filter((url) => !this.allUrlsSet.has(url));
+      let newCount = 0;
       for (const url of segmentUrls) {
-        this.allUrlsSet.add(url);
+        const id = extractListingIdFromUrl(url);
+        if (!this.collectedById.has(id)) {
+          this.collectedById.set(id, url);
+          newCount++;
+        }
       }
       this.stats.totalSegments++;
 
       console.log(
-        `${indent}[SEGMENTO] ${segmentUrls.length} URLs, ${newUrls.length} novas (total: ${this.allUrlsSet.size})`,
+        `${indent}[SEGMENTO] ${segmentUrls.length} URLs, ${newCount} novas (total: ${this.collectedById.size})`,
       );
 
       if (paginated.reachedLimit) {
@@ -347,51 +398,102 @@ export class AirbnbScraper {
     }
   }
 
-  private async visitAndExtract(urls: string[]): Promise<void> {
-    if (!this.context) throw new Error('Context não inicializado');
+  private formatEta(ms: number): string {
+    const totalSeconds = Math.ceil(ms / 1000);
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    if (h > 0) return `${h}h${String(m).padStart(2, '0')}m`;
+    if (m > 0) return `${m}m${String(s).padStart(2, '0')}s`;
+    return `${s}s`;
+  }
 
+  private async restartBrowser(): Promise<void> {
+    console.log('\n[RESTART] Reiniciando navegador preventivamente (limpeza de memória)...');
+    await this.close();
+    await this.init();
+    await randomDelay(2000, 4000);
+    console.log('[RESTART] Navegador reiniciado');
+  }
+
+  private async visitAndExtract(urls: string[]): Promise<void> {
     console.log(`\n[EXTRAÇÃO] Iniciando visita a ${urls.length} listings únicos...`);
 
-    const page = await createPage(this.context);
+    const startTime = Date.now();
+    let page: Page | null = null;
+    let sinceRestart = 0;
 
-    try {
-      for (let i = 0; i < urls.length; i++) {
-        const url = urls[i];
-        const progress = `[${i + 1}/${urls.length}]`;
+    const getPage = async (): Promise<Page> => {
+      if (
+        CONFIG.browser.restartEvery > 0 &&
+        sinceRestart >= CONFIG.browser.restartEvery
+      ) {
+        if (page && !page.isClosed()) await page.close();
+        page = null;
+        await this.restartBrowser();
+        sinceRestart = 0;
+      }
 
-        console.log(`${progress} Visitando: ${url}`);
+      await this.ensureBrowser();
+      if (page && !page.isClosed()) return page;
+      page = await createPage(this.context!);
+      return page;
+    };
 
-        try {
-          const data = await withRetry(
-            () => this.visitListing(page, url),
-            {
-              maxRetries: CONFIG.retry.maxRetries,
-              initialDelay: CONFIG.delays.retryBackoff.initialDelay,
-              maxDelay: CONFIG.delays.retryBackoff.maxDelay,
-              multiplier: CONFIG.delays.retryBackoff.multiplier,
-            },
-          );
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      const remaining = urls.length - i;
 
-          if (data) {
-            await this.csvWriter.appendRow(data);
-            this.stats.successfulExtractions++;
-            console.log(`    ✓ ${data.titulo} | ${data.localizacao} | ID: ${data.listing_id}`);
-          } else {
-            this.stats.failedExtractions++;
-            console.log('    ✗ Falha ao extrair dados');
-          }
-        } catch {
+      let eta = '';
+      if (i > 0) {
+        const avgMs = (Date.now() - startTime) / i;
+        eta = ` | ETA: ${this.formatEta(avgMs * remaining)}`;
+      }
+
+      console.log(`[${i + 1}/${urls.length}] Visitando: ${url}${eta}`);
+
+      try {
+        const currentPage = await getPage();
+        const data = await withRetry(
+          () => this.visitListing(currentPage, url),
+          {
+            maxRetries: CONFIG.retry.maxRetries,
+            initialDelay: CONFIG.delays.retryBackoff.initialDelay,
+            maxDelay: CONFIG.delays.retryBackoff.maxDelay,
+            multiplier: CONFIG.delays.retryBackoff.multiplier,
+          },
+        );
+
+        if (data) {
+          await this.csvWriter.appendRow(data);
+          this.scrapedIds.add(data.listing_id);
+          this.stats.successfulExtractions++;
+          console.log(`    ✓ ${data.titulo} | ${data.localizacao} | ID: ${data.listing_id}`);
+        } else {
           this.stats.failedExtractions++;
-          console.error(`    ✗ Falha após ${CONFIG.retry.maxRetries} tentativas`);
+          console.log('    ✗ Falha ao extrair dados');
         }
+      } catch (error) {
+        this.stats.failedExtractions++;
+        console.error(`    ✗ Falha após ${CONFIG.retry.maxRetries} tentativas`);
 
-        this.stats.totalListings++;
-
-        if (i < urls.length - 1) {
-          await randomDelay(CONFIG.delays.listing.min, CONFIG.delays.listing.max);
+        if (this.isBrowserDead(error)) {
+          console.log('    [RECOVERY] Browser morreu durante extração, recriando...');
+          page = null;
+          await this.ensureBrowser();
+          page = await createPage(this.context!);
         }
       }
-    } finally {
+
+      this.stats.totalListings++;
+      sinceRestart++;
+
+      if (i < urls.length - 1) {
+        await randomDelay(CONFIG.delays.listing.min, CONFIG.delays.listing.max);
+      }
+    }
+
+    if (page && !page.isClosed()) {
       await page.close();
     }
   }

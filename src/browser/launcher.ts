@@ -1,5 +1,6 @@
 import { chromium, Browser, BrowserContext, Page } from 'playwright';
 import { BrowserConfig } from '../types.js';
+import { CONFIG } from '../config.js';
 
 const VIEWPORTS = [
   { width: 1920, height: 1080 },
@@ -48,6 +49,9 @@ export async function createContext(browser: Browser): Promise<BrowserContext> {
 
 export async function createPage(context: BrowserContext): Promise<Page> {
   const page = await context.newPage();
+
+  page.setDefaultTimeout(CONFIG.timeouts.defaultAction);
+  page.setDefaultNavigationTimeout(CONFIG.timeouts.navigation);
 
   page.on('dialog', async (dialog) => {
     await dialog.dismiss();

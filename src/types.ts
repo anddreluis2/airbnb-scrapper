@@ -3,6 +3,7 @@ export interface ListingData {
   url: string;
   titulo: string;
   localizacao: string;
+  anfitriao: string;
   coordenadas: string | null;
   coletado_em: string;
 }

@@ -88,12 +88,12 @@ export const CONFIG = {
   },
 
   retry: {
-    maxRetries: parseInt(process.env.MAX_RETRIES || '3'),
+    maxRetries: parseInt(process.env.MAX_RETRIES || '5'),
   },
 
   output: {
     filePath: process.env.OUTPUT_FILE || 'data/listings.csv',
-    headers: ['listing_id', 'url', 'titulo', 'localizacao', 'coordenadas', 'coletado_em'],
+    headers: ['listing_id', 'url', 'titulo', 'localizacao', 'anfitriao', 'coordenadas', 'coletado_em'],
   },
 
   proxy: {
@@ -102,11 +102,13 @@ export const CONFIG = {
 
   browser: {
     headless: true,
+    restartEvery: parseInt(process.env.BROWSER_RESTART_EVERY || '100'),
   },
 
   timeouts: {
-    navigation: 30000,
-    paginationWait: 10000,
+    navigation: 90000,
+    paginationWait: 20000,
+    defaultAction: 120000,
   },
 
   priceSegments: parsePriceSegments(),
