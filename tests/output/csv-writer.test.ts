@@ -120,6 +120,26 @@ describe('CSVWriter', () => {
     expect(writer.loadExistingIds().size).toBe(0);
   });
 
+  it('handles concurrent appendRow calls without data loss', async () => {
+    const writer = new CSVWriter(TEST_FILE);
+
+    const rows = Array.from({ length: 20 }, (_, i) =>
+      makeListing({
+        listing_id: `id-${i}`,
+        url: `https://example.com/${i}`,
+        titulo: `Title ${i}`,
+        localizacao: `Loc ${i}`,
+        anfitriao: `Host ${i}`,
+        coordenadas: null,
+        coletado_em: '2026-03-05',
+      }),
+    );
+
+    await Promise.all(rows.map(row => writer.appendRow(row)));
+
+    expect(writer.getRowCount()).toBe(20);
+  });
+
   it('loadExistingIds returns IDs from existing CSV', async () => {
     const writer = new CSVWriter(TEST_FILE);
     await writer.appendRow(makeListing({ listing_id: 'aaa' }));

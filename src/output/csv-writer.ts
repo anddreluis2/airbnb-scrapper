@@ -31,6 +31,7 @@ export function parseCSVLine(line: string): string[] {
 export class CSVWriter {
   private filePath: string;
   private headerWritten: boolean = false;
+  private writeLock: Promise<void> = Promise.resolve();
 
   constructor(filePath: string = CONFIG.output.filePath) {
     this.filePath = filePath;
@@ -53,11 +54,14 @@ export class CSVWriter {
   }
 
   async appendRow(data: ListingData): Promise<void> {
-    if (!this.headerWritten) {
-      this.writeHeader();
-    }
-    const row = this.formatRow(data);
-    appendFileSync(this.filePath, row + '\n', 'utf-8');
+    this.writeLock = this.writeLock.then(() => {
+      if (!this.headerWritten) {
+        this.writeHeader();
+      }
+      const row = this.formatRow(data);
+      appendFileSync(this.filePath, row + '\n', 'utf-8');
+    });
+    await this.writeLock;
   }
 
   private formatRow(data: ListingData): string {
