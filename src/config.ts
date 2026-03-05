@@ -1,12 +1,30 @@
 import { PriceSegment } from './types.js';
 
+function isValidSegment(seg: unknown): seg is PriceSegment {
+  if (typeof seg !== 'object' || seg === null) return false;
+  const s = seg as Record<string, unknown>;
+  if (typeof s.min !== 'number' || s.min < 0) return false;
+  if (s.max !== undefined && (typeof s.max !== 'number' || s.max <= s.min)) return false;
+  return true;
+}
+
 function parsePriceSegments(): PriceSegment[] {
   const envSegments = process.env.PRICE_SEGMENTS;
   if (envSegments) {
     try {
-      return JSON.parse(envSegments);
+      const parsed = JSON.parse(envSegments);
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        console.warn('PRICE_SEGMENTS deve ser um array não-vazio, usando segmentos padrão');
+      } else {
+        const valid = parsed.every(isValidSegment);
+        if (!valid) {
+          console.warn('PRICE_SEGMENTS contém segmentos inválidos (min >= 0 obrigatório, max > min quando presente), usando segmentos padrão');
+        } else {
+          return parsed;
+        }
+      }
     } catch {
-      console.warn('PRICE_SEGMENTS inválido, usando segmentos padrão');
+      console.warn('PRICE_SEGMENTS JSON inválido, usando segmentos padrão');
     }
   }
 
@@ -21,6 +39,22 @@ function parsePriceSegments(): PriceSegment[] {
     { min: 1500, max: 3000 },
     { min: 3000 },
   ];
+}
+
+function parseProxyUrl(): string | undefined {
+  const url = process.env.PROXY_URL;
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:', 'socks5:', 'socks4:'].includes(parsed.protocol)) {
+      console.warn(`PROXY_URL com protocolo não suportado (${parsed.protocol}), ignorando`);
+      return undefined;
+    }
+    return url;
+  } catch {
+    console.warn('PROXY_URL inválido, ignorando');
+    return undefined;
+  }
 }
 
 export const CONFIG = {
@@ -104,7 +138,7 @@ export const CONFIG = {
   },
 
   proxy: {
-    url: process.env.PROXY_URL,
+    url: parseProxyUrl(),
   },
 
   browser: {
@@ -143,7 +177,7 @@ export function getSearchUrl(
   if (cursor) {
     url.searchParams.set('cursor', cursor);
   } else if (pageNum && pageNum > 1) {
-    url.searchParams.set('items_offset', String((pageNum - 1) * 20));
+    url.searchParams.set('items_offset', String((pageNum - 1) * CONFIG.pagination.listingsPerPage));
   }
 
   return url.toString();

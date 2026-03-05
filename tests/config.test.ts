@@ -72,12 +72,12 @@ describe('getSearchUrl', () => {
 
   it('adds items_offset for page > 1 when no cursor', () => {
     const url = getSearchUrl(3);
-    expect(url).toContain('items_offset=40');
+    expect(url).toContain('items_offset=36');
   });
 
-  it('calculates offset as (pageNum - 1) * 20', () => {
-    expect(getSearchUrl(2)).toContain('items_offset=20');
-    expect(getSearchUrl(5)).toContain('items_offset=80');
+  it('calculates offset as (pageNum - 1) * listingsPerPage', () => {
+    expect(getSearchUrl(2)).toContain('items_offset=18');
+    expect(getSearchUrl(5)).toContain('items_offset=72');
   });
 
   it('uses cursor instead of offset when cursor is provided', () => {
