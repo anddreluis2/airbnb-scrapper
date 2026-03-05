@@ -46,7 +46,13 @@ const points = [];
 for (const line of lines) {
   const p = parseCSVLine(line);
   const coords = p[5] || '';
-  const titulo = (p[2] || '').replace(/"/g, '&quot;').slice(0, 80);
+  const titulo = (p[2] || '')
+    .slice(0, 80)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
   const m = coords.match(/(-?[\d.]+),(-?[\d.]+)/);
   if (m) {
     points.push({
