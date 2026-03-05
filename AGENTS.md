@@ -13,7 +13,7 @@ Copy `.env.example` to `.env` before running. For quick test runs, reduce `MAX_P
 ### Gotchas
 
 - **Playwright browser required**: After `npm install`, you must run `npx playwright install --with-deps chromium` to install the Chromium binary and its OS-level dependencies. Without this, the scraper will fail at browser launch.
-- **No lint/test scripts**: The project has no configured linter or test framework. The only validation is `npm run build` (TypeScript compilation with `strict: true`).
+- **Testing**: The project uses Vitest for testing. Run `npm test` (single run) or `npm run test:watch` (watch mode). TypeScript compilation check: `npm run build` (with `strict: true`).
 - **Output directory**: The scraper writes to `data/listings.csv`. The `data/` directory is created automatically by the CSV writer if it doesn't exist.
 - **Network-dependent**: The scraper makes live HTTP requests to airbnb.com.br. Runs will fail without internet access. Airbnb may also block or rate-limit requests.
 - **Long run times**: A full scrape (default `MAX_PAGES=5`) takes several minutes due to anti-detection delays. Use `MAX_PAGES=1` with reduced delays for quick verification.
