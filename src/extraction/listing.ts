@@ -67,6 +67,7 @@ export async function extractListingData(
       });
     }
 
+    const anfitriao = await extractHostName(page);
     const coordenadas = await extractMapCoordinates(page);
     const coletado_em = new Date().toISOString().split('T')[0];
 
@@ -75,11 +76,61 @@ export async function extractListingData(
       url,
       titulo: titulo || 'N/A',
       localizacao: localizacao || 'N/A',
+      anfitriao: anfitriao || 'N/A',
       coordenadas,
       coletado_em,
     };
   } catch (error) {
     console.error(`Erro ao extrair dados de ${url}:`, error);
+    return null;
+  }
+}
+
+async function extractHostName(page: Page): Promise<string | null> {
+  try {
+    return await page.evaluate(() => {
+      const hostHeading = Array.from(
+        document.querySelectorAll('h2, h3, [data-testid*="host"]'),
+      );
+      for (const el of hostHeading) {
+        const text = el.textContent?.trim() || '';
+        const match = text.match(
+          /(?:Anfitri(?:ão|ã)|Hosted by|Host[ea]do por)[:\s]+(.+)/i,
+        );
+        if (match) return match[1].trim();
+      }
+
+      const hostSection = document.querySelector(
+        '[data-testid="host-profile"]',
+      );
+      if (hostSection) {
+        const name = hostSection.querySelector('h2, h3, [class*="name"]');
+        if (name?.textContent?.trim()) return name.textContent.trim();
+      }
+
+      const allText = document.body.innerText;
+      const lines = allText.split('\n');
+      for (const line of lines) {
+        const match = line.match(
+          /(?:Anfitri(?:ão|ã)|Hosted by|Host[ea]do por)[:\s]+(.+)/i,
+        );
+        if (match) return match[1].trim();
+      }
+
+      const scripts = Array.from(document.querySelectorAll('script'));
+      for (const script of scripts) {
+        const content = script.textContent || '';
+        if (content.includes('hostName') || content.includes('host_name')) {
+          const m =
+            content.match(/"hostName"\s*:\s*"([^"]+)"/) ||
+            content.match(/"host_name"\s*:\s*"([^"]+)"/);
+          if (m) return m[1];
+        }
+      }
+
+      return null;
+    });
+  } catch {
     return null;
   }
 }

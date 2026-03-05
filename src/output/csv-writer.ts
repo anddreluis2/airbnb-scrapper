@@ -1,7 +1,32 @@
-import { createWriteStream, existsSync, readFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, appendFileSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
+import { mkdirSync } from 'fs';
 import { ListingData } from '../types.js';
 import { CONFIG } from '../config.js';
+
+export function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQuotes && i + 1 < line.length && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (c === ',' && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += c;
+    }
+  }
+  result.push(current);
+  return result;
+}
 
 export class CSVWriter {
   private filePath: string;
@@ -20,41 +45,19 @@ export class CSVWriter {
     }
   }
 
-  async writeHeader(): Promise<void> {
-    if (this.headerWritten) {
-      return;
-    }
-
+  private writeHeader(): void {
+    if (this.headerWritten) return;
     const header = CONFIG.output.headers.join(',') + '\n';
-    const stream = createWriteStream(this.filePath, { flags: 'w' });
-
-    return new Promise((resolve, reject) => {
-      stream.write(header, (error) => {
-        if (error) reject(error);
-        else {
-          this.headerWritten = true;
-          stream.end();
-          resolve();
-        }
-      });
-    });
+    writeFileSync(this.filePath, header, 'utf-8');
+    this.headerWritten = true;
   }
 
   async appendRow(data: ListingData): Promise<void> {
     if (!this.headerWritten) {
-      await this.writeHeader();
+      this.writeHeader();
     }
-
     const row = this.formatRow(data);
-    const stream = createWriteStream(this.filePath, { flags: 'a' });
-
-    return new Promise((resolve, reject) => {
-      stream.write(row + '\n', (error) => {
-        if (error) reject(error);
-        stream.end();
-        resolve();
-      });
-    });
+    appendFileSync(this.filePath, row + '\n', 'utf-8');
   }
 
   private formatRow(data: ListingData): string {
@@ -85,5 +88,23 @@ export class CSVWriter {
     const content = readFileSync(this.filePath, 'utf-8');
     const lines = content.trim().split('\n');
     return Math.max(0, lines.length - 1);
+  }
+
+  loadExistingIds(): Set<string> {
+    const ids = new Set<string>();
+    if (!existsSync(this.filePath)) return ids;
+
+    const content = readFileSync(this.filePath, 'utf-8');
+    const lines = content.trim().split('\n');
+    const idIndex = CONFIG.output.headers.indexOf('listing_id');
+    if (idIndex === -1) return ids;
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = parseCSVLine(lines[i]);
+      const id = cols[idIndex]?.trim();
+      if (id) ids.add(id);
+    }
+
+    return ids;
   }
 }
