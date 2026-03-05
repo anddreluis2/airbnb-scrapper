@@ -19,6 +19,7 @@ import {
   computeEffectiveMaxPages,
 } from './segmentation.js';
 import { ScraperStats, ListingData, PriceSegment } from './types.js';
+import { WorkerPool } from './worker-pool.js';
 
 interface SegmentFirstPageResult {
   resultCount: number | null;
@@ -34,6 +35,7 @@ interface PaginatedCollectionResult {
 export class AirbnbScraper {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
+  private pool: WorkerPool | null = null;
   private csvWriter: CSVWriter;
   private collectedById = new Map<string, string>();
   private scrapedIds: Set<string>;
@@ -85,44 +87,28 @@ export class AirbnbScraper {
   }
 
   private async init(): Promise<void> {
-    console.log(`${this.timePrefix()} Inicializando navegador com modo stealth...`);
+    console.log(`${this.timePrefix()} Inicializando navegador com ${CONFIG.concurrency} workers...`);
     this.browser = await initBrowser({
       proxyUrl: CONFIG.proxy.url,
       headless: CONFIG.browser.headless,
     });
 
+    this.pool = new WorkerPool(this.browser, CONFIG.concurrency);
+    await this.pool.init();
+
+    // Keep a single context for warmup
     this.context = await createContext(this.browser);
-    console.log(`${this.timePrefix()} Navegador inicializado com sucesso`);
+    console.log(`${this.timePrefix()} Navegador inicializado com ${CONFIG.concurrency} workers`);
   }
 
   private async close(): Promise<void> {
+    try { if (this.pool) await this.pool.close(); } catch { /* already dead */ }
     try { if (this.context) await this.context.close(); } catch { /* already dead */ }
     try { if (this.browser) await this.browser.close(); } catch { /* already dead */ }
+    this.pool = null;
     this.context = null;
     this.browser = null;
     console.log(`${this.timePrefix()} Navegador fechado`);
-  }
-
-  private isBrowserDead(error: unknown): boolean {
-    const msg = error instanceof Error ? error.message : String(error);
-    return (
-      msg.includes('Target closed') ||
-      msg.includes('browser has been closed') ||
-      msg.includes('Browser closed') ||
-      msg.includes('Connection closed') ||
-      msg.includes('Browser has been disconnected') ||
-      msg.includes('Protocol error')
-    );
-  }
-
-  private async ensureBrowser(): Promise<void> {
-    if (this.browser?.isConnected() && this.context) return;
-
-    console.log(`\n${this.timePrefix()} [RECOVERY] Navegador morto, reinicializando...`);
-    await this.close();
-    await this.init();
-    await randomDelay(2000, 4000);
-    console.log(`${this.timePrefix()} [RECOVERY] Navegador restaurado`);
   }
 
   private async gotoWithRetry(
@@ -274,92 +260,90 @@ export class AirbnbScraper {
     const segments = CONFIG.priceSegments;
 
     console.log(`\n${this.timePrefix()} ${'='.repeat(60)}`);
-    console.log(`${this.timePrefix()} BUSCA ADAPTATIVA POR FAIXA DE PREÇO`);
+    console.log(`${this.timePrefix()} BUSCA ADAPTATIVA POR FAIXA DE PRECO`);
     console.log(`${this.timePrefix()} Segmentos iniciais: ${segments.length}`);
-    console.log(`${this.timePrefix()} Máximo de páginas por segmento: ${CONFIG.pagination.maxPages}`);
-    console.log(`${this.timePrefix()} Subdivisão automática para segmentos com >${CONFIG.segmentation.maxListingsPerSegment} resultados`);
+    console.log(`${this.timePrefix()} Workers: ${CONFIG.concurrency}`);
+    console.log(`${this.timePrefix()} Maximo de paginas por segmento: ${CONFIG.pagination.maxPages}`);
     console.log(`${this.timePrefix()} ${'='.repeat(60)}`);
 
-    for (const segment of segments) {
+    if (!this.pool) throw new Error('Pool nao inicializado');
+
+    await this.pool.runAll(segments, async (ctx, segment, workerIdx) => {
       try {
-        await this.ensureBrowser();
-        await this.processSegmentAdaptive(segment, 0);
+        const urls = await this.processSegmentWithContext(ctx, segment, 0, workerIdx);
+        for (const [id, url] of urls) {
+          if (!this.collectedById.has(id)) {
+            this.collectedById.set(id, url);
+          }
+        }
       } catch (error) {
         const label = getSegmentLabel(segment);
-        console.error(`${this.timePrefix()} [ERRO] Falha no segmento ${label}, continuando:`, error);
-        if (this.isBrowserDead(error)) {
-          await this.ensureBrowser();
-        }
+        console.error(`${this.timePrefix()} [W${workerIdx}][ERRO] Falha no segmento ${label}:`, error);
       }
-    }
+    });
 
     console.log(`\n${this.timePrefix()} ${'='.repeat(60)}`);
     console.log(`${this.timePrefix()} RESULTADO DA BUSCA`);
-    console.log(`${this.timePrefix()} Total de URLs únicas coletadas: ${this.collectedById.size}`);
+    console.log(`${this.timePrefix()} Total de URLs unicas coletadas: ${this.collectedById.size}`);
     console.log(`${this.timePrefix()} Segmentos processados: ${this.stats.totalSegments}`);
-    console.log(`${this.timePrefix()} Páginas de busca processadas: ${this.stats.totalPages}`);
+    console.log(`${this.timePrefix()} Paginas de busca processadas: ${this.stats.totalPages}`);
     console.log(`${this.timePrefix()} ${'='.repeat(60)}`);
   }
 
-  private async processSegmentAdaptive(segment: PriceSegment, depth: number): Promise<void> {
-    if (!this.context) throw new Error('Context não inicializado');
-
+  private async processSegmentWithContext(
+    ctx: BrowserContext,
+    segment: PriceSegment,
+    depth: number,
+    workerIdx: number,
+  ): Promise<Map<string, string>> {
+    const collected = new Map<string, string>();
     this.segmentIndex++;
     const label = getSegmentLabel(segment);
     const indent = '  '.repeat(depth);
-    console.log(`\n${this.timePrefix()} ${indent}[SEGMENTO ${this.segmentIndex}] Faixa: ${label} (profundidade: ${depth})`);
+    const prefix = `[W${workerIdx}]`;
 
-    const page = await createPage(this.context);
+    console.log(`\n${this.timePrefix()} ${prefix}${indent}[SEGMENTO] Faixa: ${label} (profundidade: ${depth})`);
 
+    const page = await createPage(ctx);
     try {
-      const firstPage = await this.loadSegmentFirstPage(page, segment, indent);
-      if (!firstPage) return;
+      const firstPage = await this.loadSegmentFirstPage(page, segment, `${prefix}${indent}`);
+      if (!firstPage) return collected;
 
       const { resultCount, urls: page1Urls } = firstPage;
 
       if (shouldSubdivide(resultCount, segment, depth)) {
         const subSegments = subdivideSegment(segment);
         const subLabels = subSegments.map((s) => getSegmentLabel(s)).join(', ');
-        console.log(`${this.timePrefix()} ${indent}  → ${resultCount} resultados excedem o limite. Subdividindo em: ${subLabels}`);
+        console.log(`${this.timePrefix()} ${prefix}${indent}  -> ${resultCount} resultados excedem o limite. Subdividindo em: ${subLabels}`);
         await page.close();
 
         for (const sub of subSegments) {
-          await this.processSegmentAdaptive(sub, depth + 1);
+          const subResult = await this.processSegmentWithContext(ctx, sub, depth + 1, workerIdx);
+          for (const [id, url] of subResult) collected.set(id, url);
           await randomDelay(CONFIG.delays.search.min, CONFIG.delays.search.max);
         }
-        return;
+        return collected;
       }
 
       const effectiveMaxPages = computeEffectiveMaxPages(resultCount);
-
-      const paginated = await this.collectPaginatedUrls(page, segment, effectiveMaxPages, indent);
+      const paginated = await this.collectPaginatedUrls(page, segment, effectiveMaxPages, `${prefix}${indent}`);
 
       const segmentUrls = [...page1Urls, ...paginated.urls];
       this.stats.totalPages += 1 + paginated.pagesProcessed;
-
-      let newCount = 0;
-      for (const url of segmentUrls) {
-        const id = extractListingIdFromUrl(url);
-        if (!this.collectedById.has(id)) {
-          this.collectedById.set(id, url);
-          newCount++;
-        }
-      }
       this.stats.totalSegments++;
 
+      for (const url of segmentUrls) {
+        const id = extractListingIdFromUrl(url);
+        collected.set(id, url);
+      }
+
       console.log(
-        `${this.timePrefix()} ${indent}[SEGMENTO] ${segmentUrls.length} URLs, ${newCount} novas (total: ${this.collectedById.size})`,
+        `${this.timePrefix()} ${prefix}${indent}[SEGMENTO] ${segmentUrls.length} URLs, ${collected.size} novas (total acumulado: ${this.collectedById.size + collected.size})`,
       );
 
-      if (paginated.reachedLimit) {
-        console.log(
-          `${this.timePrefix()} ${indent}  ⚠ Atingiu limite de ${effectiveMaxPages} páginas para ${label}`,
-        );
-      }
+      return collected;
     } finally {
-      if (!page.isClosed()) {
-        await page.close();
-      }
+      if (!page.isClosed()) await page.close();
     }
   }
 
@@ -385,54 +369,31 @@ export class AirbnbScraper {
     return `[elapsed: ${elapsed} | remaining: ${rem}]`;
   }
 
-  private async restartBrowser(): Promise<void> {
-    console.log(`\n${this.timePrefix()} [RESTART] Reiniciando navegador preventivamente (limpeza de memória)...`);
-    await this.close();
-    await this.init();
-    await randomDelay(2000, 4000);
-    console.log(`${this.timePrefix()} [RESTART] Navegador reiniciado`);
-  }
-
   private async visitAndExtract(urls: string[]): Promise<void> {
-    console.log(`\n${this.timePrefix()} [EXTRAÇÃO] Iniciando visita a ${urls.length} listings únicos...`);
+    console.log(`\n${this.timePrefix()} [EXTRACAO] Iniciando visita a ${urls.length} listings com ${CONFIG.concurrency} workers...`);
+
+    if (!this.pool) throw new Error('Pool nao inicializado');
 
     const startTime = Date.now();
-    let page: Page | null = null;
-    let sinceRestart = 0;
+    let processedCount = 0;
 
-    const getPage = async (): Promise<Page> => {
-      if (
-        CONFIG.browser.restartEvery > 0 &&
-        sinceRestart >= CONFIG.browser.restartEvery
-      ) {
-        if (page && !page.isClosed()) await page.close();
-        page = null;
-        await this.restartBrowser();
-        sinceRestart = 0;
-      }
-
-      await this.ensureBrowser();
-      if (page && !page.isClosed()) return page;
-      page = await createPage(this.context!);
-      return page;
-    };
-
-    for (let i = 0; i < urls.length; i++) {
-      const url = urls[i];
-      const remainingCount = urls.length - i;
-
+    await this.pool.runAll(urls, async (ctx, url, workerIdx) => {
+      processedCount++;
+      const currentCount = processedCount;
+      const remaining = urls.length - currentCount;
       let remainingStr = '--';
-      if (i > 0) {
-        const avgMs = (Date.now() - startTime) / i;
-        remainingStr = this.formatEta(avgMs * remainingCount);
+      if (currentCount > CONFIG.concurrency) {
+        const avgMs = (Date.now() - startTime) / (currentCount - 1);
+        remainingStr = this.formatEta((avgMs * remaining) / CONFIG.concurrency);
       }
 
-      console.log(`${this.timePrefix(remainingStr)} [${i + 1}/${urls.length}] Visitando: ${url}`);
+      const prefix = `[W${workerIdx}]`;
+      console.log(`${this.timePrefix(remainingStr)} ${prefix}[${currentCount}/${urls.length}] Visitando: ${url}`);
 
+      const page = await createPage(ctx);
       try {
-        const currentPage = await getPage();
         const data = await withRetry(
-          () => this.visitListing(currentPage, url),
+          () => this.visitListing(page, url),
           {
             maxRetries: CONFIG.retry.maxRetries,
             initialDelay: CONFIG.delays.retryBackoff.initialDelay,
@@ -445,38 +406,22 @@ export class AirbnbScraper {
           await this.csvWriter.appendRow(data);
           this.scrapedIds.add(data.listing_id);
           this.stats.successfulExtractions++;
-          const rem = i < urls.length - 1 && i > 0
-            ? this.formatEta(((Date.now() - startTime) / i) * (urls.length - i - 1))
-            : '--';
-          console.log(`${this.timePrefix(rem)}     ✓ ${data.titulo} | ${data.localizacao} | ID: ${data.listing_id}`);
+          console.log(`${this.timePrefix()} ${prefix}  OK ${data.titulo} | ${data.listing_id}`);
         } else {
           this.stats.failedExtractions++;
-          console.log(`${this.timePrefix()}     ✗ Falha ao extrair dados`);
+          console.log(`${this.timePrefix()} ${prefix}  FAIL ao extrair dados`);
         }
       } catch (error) {
         this.stats.failedExtractions++;
-        console.error(`${this.timePrefix()}     ✗ Falha após ${CONFIG.retry.maxRetries} tentativas`);
-
-        if (this.isBrowserDead(error)) {
-          console.log(`${this.timePrefix()}     [RECOVERY] Browser morreu durante extração, recriando...`);
-          page = null;
-          sinceRestart = 0;
-          await this.ensureBrowser();
-          page = await createPage(this.context!);
-        }
+        console.error(`${this.timePrefix()} ${prefix}  FAIL apos ${CONFIG.retry.maxRetries} tentativas`);
+      } finally {
+        if (!page.isClosed()) await page.close();
       }
 
       this.stats.totalListings++;
-      sinceRestart++;
 
-      if (i < urls.length - 1) {
-        await randomDelay(CONFIG.delays.listing.min, CONFIG.delays.listing.max);
-      }
-    }
-
-    if (page && !page.isClosed()) {
-      await page.close();
-    }
+      await randomDelay(CONFIG.delays.listing.min, CONFIG.delays.listing.max);
+    });
   }
 
   private async visitListing(page: Page, url: string): Promise<ListingData | null> {
