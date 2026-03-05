@@ -25,12 +25,13 @@ npm start
 
 | Variável | Default | Descrição |
 |----------|---------|-----------|
+| `CONCURRENCY` | 4 | Numero de workers paralelos (contexts do navegador) |
 | `PROXY_URL` | — | URL do proxy (opcional) |
 | `MAX_PAGES` | 50 | Máximo de páginas de busca por segmento |
-| `DELAY_MIN` | 2000 | Delay mínimo entre páginas (ms) |
-| `DELAY_MAX` | 4000 | Delay máximo entre páginas (ms) |
-| `LISTING_DELAY_MIN` | 2000 | Delay mínimo entre listings (ms) |
-| `LISTING_DELAY_MAX` | 4000 | Delay máximo entre listings (ms) |
+| `DELAY_MIN` | 1500 | Delay mínimo entre páginas (ms) |
+| `DELAY_MAX` | 2500 | Delay máximo entre páginas (ms) |
+| `LISTING_DELAY_MIN` | 1000 | Delay mínimo entre listings (ms) |
+| `LISTING_DELAY_MAX` | 2000 | Delay máximo entre listings (ms) |
 | `MAX_RETRIES` | 5 | Tentativas de retry por listing |
 | `NAVIGATION_TIMEOUT` | 180000 | Timeout de navegação (ms), evita "Timeout exceeded" |
 | `NAVIGATION_RETRIES` | 3 | Retries antes de desistir de uma página |
@@ -42,8 +43,10 @@ npm start
 src/
   index.ts                    # Entry point
   scraper.ts                  # Orquestrador principal
+  worker-pool.ts              # Pool de workers paralelos
   config.ts                   # Configurações + URL builder
   types.ts                    # Interfaces compartilhadas
+  segmentation.ts             # Helpers de segmentação de preço
 
   browser/
     index.ts                  # Barrel re-exports
