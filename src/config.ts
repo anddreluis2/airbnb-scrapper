@@ -59,15 +59,21 @@ export const CONFIG = {
 
   delays: {
     search: {
-      min: parseInt(process.env.DELAY_MIN || '4000'),
-      max: parseInt(process.env.DELAY_MAX || '8000'),
+      min: parseInt(process.env.DELAY_MIN || '2000'),
+      max: parseInt(process.env.DELAY_MAX || '4000'),
     },
     listing: {
-      min: parseInt(process.env.LISTING_DELAY_MIN || '3000'),
-      max: parseInt(process.env.LISTING_DELAY_MAX || '6000'),
+      min: parseInt(process.env.LISTING_DELAY_MIN || '2000'),
+      max: parseInt(process.env.LISTING_DELAY_MAX || '4000'),
     },
-    pageLoad: { min: 1500, max: 2500 },
-    scrollSettle: { min: 800, max: 1500 },
+    pageLoad: {
+      min: parseInt(process.env.PAGE_LOAD_MIN || '1000'),
+      max: parseInt(process.env.PAGE_LOAD_MAX || '1800'),
+    },
+    scrollSettle: {
+      min: parseInt(process.env.SCROLL_SETTLE_MIN || '500'),
+      max: parseInt(process.env.SCROLL_SETTLE_MAX || '1000'),
+    },
     retryBackoff: {
       initialDelay: 30000,
       maxDelay: 60000,
@@ -76,7 +82,7 @@ export const CONFIG = {
   },
 
   pagination: {
-    maxPages: parseInt(process.env.MAX_PAGES || '15'),
+    maxPages: parseInt(process.env.MAX_PAGES || '50'),
     listingsPerPage: 18,
   },
 
@@ -89,6 +95,7 @@ export const CONFIG = {
 
   retry: {
     maxRetries: parseInt(process.env.MAX_RETRIES || '5'),
+    navigationRetries: parseInt(process.env.NAVIGATION_RETRIES || '3'),
   },
 
   output: {
@@ -106,9 +113,9 @@ export const CONFIG = {
   },
 
   timeouts: {
-    navigation: 90000,
-    paginationWait: 20000,
-    defaultAction: 120000,
+    navigation: parseInt(process.env.NAVIGATION_TIMEOUT || '180000'),
+    paginationWait: parseInt(process.env.PAGINATION_WAIT || '30000'),
+    defaultAction: parseInt(process.env.DEFAULT_ACTION_TIMEOUT || '180000'),
   },
 
   priceSegments: parsePriceSegments(),
