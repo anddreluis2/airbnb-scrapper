@@ -3,15 +3,21 @@ import { initBrowser, createContext, createPage } from './browser/launcher.js';
 import { randomDelay, humanizedScroll, scrollToBottom } from './browser/stealth.js';
 import {
   extractListingUrls,
-  extractListingData,
-  extractListingIdFromUrl,
   extractResultCount,
   hasNextPage,
   extractNextCursor,
-} from './extraction/index.js';
+} from './extraction/search.js';
+import { extractListingData, extractListingIdFromUrl } from './extraction/listing.js';
 import { CSVWriter } from './output/csv-writer.js';
 import { withRetry } from './utils/retry.js';
 import { CONFIG, getSearchUrl } from './config.js';
+import {
+  getSegmentLabel,
+  parseResultCount,
+  subdivideSegment,
+  shouldSubdivide,
+  computeEffectiveMaxPages,
+} from './segmentation.js';
 import { ScraperStats, ListingData, PriceSegment } from './types.js';
 
 interface SegmentFirstPageResult {
@@ -162,67 +168,6 @@ export class AirbnbScraper {
     }
   }
 
-  private getSegmentLabel(segment: PriceSegment): string {
-    return segment.max
-      ? `R$${segment.min}-R$${segment.max}`
-      : `R$${segment.min}+`;
-  }
-
-  private parseResultCount(text: string | null): number | null {
-    if (!text) return null;
-    if (text.toLowerCase().includes('mais de mil') || text.includes('1.000+')) {
-      return 1001;
-    }
-    const match = text.match(/(\d[\d.]*)\s*acomodaç/);
-    if (match) {
-      return parseInt(match[1].replace(/\./g, ''), 10);
-    }
-    return null;
-  }
-
-  private canSubdivide(segment: PriceSegment): boolean {
-    if (segment.max === undefined) return false;
-    return segment.max - segment.min > CONFIG.segmentation.minSubdivisionRange;
-  }
-
-  private subdivideSegment(segment: PriceSegment): PriceSegment[] {
-    if (segment.max === undefined) return [segment];
-
-    const range = segment.max - segment.min;
-    const parts = range > CONFIG.segmentation.subdivisionThreshold ? 3 : 2;
-    const step = Math.floor(range / parts);
-
-    const subSegments: PriceSegment[] = [];
-    for (let i = 0; i < parts; i++) {
-      const min = segment.min + i * step;
-      const max = i === parts - 1 ? segment.max : segment.min + (i + 1) * step;
-      subSegments.push({ min, max });
-    }
-
-    return subSegments;
-  }
-
-  private shouldSubdivide(
-    count: number | null,
-    segment: PriceSegment,
-    depth: number,
-  ): boolean {
-    return (
-      count !== null &&
-      count > CONFIG.segmentation.maxListingsPerSegment &&
-      this.canSubdivide(segment) &&
-      depth < CONFIG.segmentation.maxSubdivisionDepth
-    );
-  }
-
-  private computeEffectiveMaxPages(count: number | null): number {
-    if (count !== null && count <= CONFIG.segmentation.maxListingsPerSegment) {
-      const estimated = Math.ceil(count / CONFIG.pagination.listingsPerPage) + 2;
-      return Math.min(estimated, CONFIG.pagination.maxPages);
-    }
-    return CONFIG.pagination.maxPages;
-  }
-
   private async loadSegmentFirstPage(
     page: Page,
     segment: PriceSegment,
@@ -235,7 +180,7 @@ export class AirbnbScraper {
     await humanizedScroll(page);
 
     const resultText = await extractResultCount(page);
-    const resultCount = this.parseResultCount(resultText);
+    const resultCount = parseResultCount(resultText);
     if (resultText) {
       const cleanText = resultText.replace(/\n/g, ' ').trim();
       console.log(`${this.timePrefix()} ${indent}  Resultados: ${cleanText}`);
@@ -340,7 +285,7 @@ export class AirbnbScraper {
         await this.ensureBrowser();
         await this.processSegmentAdaptive(segment, 0);
       } catch (error) {
-        const label = this.getSegmentLabel(segment);
+        const label = getSegmentLabel(segment);
         console.error(`${this.timePrefix()} [ERRO] Falha no segmento ${label}, continuando:`, error);
         if (this.isBrowserDead(error)) {
           await this.ensureBrowser();
@@ -360,7 +305,7 @@ export class AirbnbScraper {
     if (!this.context) throw new Error('Context não inicializado');
 
     this.segmentIndex++;
-    const label = this.getSegmentLabel(segment);
+    const label = getSegmentLabel(segment);
     const indent = '  '.repeat(depth);
     console.log(`\n${this.timePrefix()} ${indent}[SEGMENTO ${this.segmentIndex}] Faixa: ${label} (profundidade: ${depth})`);
 
@@ -372,9 +317,9 @@ export class AirbnbScraper {
 
       const { resultCount, urls: page1Urls } = firstPage;
 
-      if (this.shouldSubdivide(resultCount, segment, depth)) {
-        const subSegments = this.subdivideSegment(segment);
-        const subLabels = subSegments.map((s) => this.getSegmentLabel(s)).join(', ');
+      if (shouldSubdivide(resultCount, segment, depth)) {
+        const subSegments = subdivideSegment(segment);
+        const subLabels = subSegments.map((s) => getSegmentLabel(s)).join(', ');
         console.log(`${this.timePrefix()} ${indent}  → ${resultCount} resultados excedem o limite. Subdividindo em: ${subLabels}`);
         await page.close();
 
@@ -385,7 +330,7 @@ export class AirbnbScraper {
         return;
       }
 
-      const effectiveMaxPages = this.computeEffectiveMaxPages(resultCount);
+      const effectiveMaxPages = computeEffectiveMaxPages(resultCount);
 
       const paginated = await this.collectPaginatedUrls(page, segment, effectiveMaxPages, indent);
 
@@ -515,6 +460,7 @@ export class AirbnbScraper {
         if (this.isBrowserDead(error)) {
           console.log(`${this.timePrefix()}     [RECOVERY] Browser morreu durante extração, recriando...`);
           page = null;
+          sinceRestart = 0;
           await this.ensureBrowser();
           page = await createPage(this.context!);
         }
