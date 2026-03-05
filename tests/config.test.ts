@@ -56,6 +56,22 @@ describe('CONFIG defaults', () => {
   });
 });
 
+describe('CONFIG.concurrency', () => {
+  it('has a concurrency value of at least 1', () => {
+    expect(CONFIG.concurrency).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('CONFIG.delays reduced for speed', () => {
+  it('search delay max is at most 2500', () => {
+    expect(CONFIG.delays.search.max).toBeLessThanOrEqual(2500);
+  });
+
+  it('listing delay max is at most 2000', () => {
+    expect(CONFIG.delays.listing.max).toBeLessThanOrEqual(2000);
+  });
+});
+
 describe('getSearchUrl', () => {
   it('returns base URL with default search params when called with no args', () => {
     const url = getSearchUrl();

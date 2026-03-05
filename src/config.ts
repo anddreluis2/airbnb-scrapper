@@ -58,6 +58,8 @@ function parseProxyUrl(): string | undefined {
 }
 
 export const CONFIG = {
+  concurrency: parseInt(process.env.CONCURRENCY || '4'),
+
   airbnb: {
     baseUrl: 'https://www.airbnb.com.br',
     homeUrl: 'https://www.airbnb.com.br/',
@@ -93,24 +95,24 @@ export const CONFIG = {
 
   delays: {
     search: {
-      min: parseInt(process.env.DELAY_MIN || '2000'),
-      max: parseInt(process.env.DELAY_MAX || '4000'),
+      min: parseInt(process.env.DELAY_MIN || '1500'),
+      max: parseInt(process.env.DELAY_MAX || '2500'),
     },
     listing: {
-      min: parseInt(process.env.LISTING_DELAY_MIN || '2000'),
-      max: parseInt(process.env.LISTING_DELAY_MAX || '4000'),
+      min: parseInt(process.env.LISTING_DELAY_MIN || '1000'),
+      max: parseInt(process.env.LISTING_DELAY_MAX || '2000'),
     },
     pageLoad: {
-      min: parseInt(process.env.PAGE_LOAD_MIN || '1000'),
-      max: parseInt(process.env.PAGE_LOAD_MAX || '1800'),
+      min: parseInt(process.env.PAGE_LOAD_MIN || '800'),
+      max: parseInt(process.env.PAGE_LOAD_MAX || '1500'),
     },
     scrollSettle: {
-      min: parseInt(process.env.SCROLL_SETTLE_MIN || '500'),
-      max: parseInt(process.env.SCROLL_SETTLE_MAX || '1000'),
+      min: parseInt(process.env.SCROLL_SETTLE_MIN || '400'),
+      max: parseInt(process.env.SCROLL_SETTLE_MAX || '800'),
     },
     retryBackoff: {
-      initialDelay: 30000,
-      maxDelay: 60000,
+      initialDelay: 10000,
+      maxDelay: 30000,
       multiplier: 1.5,
     },
   },
