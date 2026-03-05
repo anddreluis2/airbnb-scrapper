@@ -16,7 +16,7 @@ export async function humanizedScroll(page: Page): Promise<void> {
 
   if (scrollDistance <= 0) return;
 
-  const scrollSteps = 5;
+  const scrollSteps = 3;
   const stepSize = scrollDistance / scrollSteps;
 
   for (let i = 0; i < scrollSteps; i++) {
@@ -24,7 +24,7 @@ export async function humanizedScroll(page: Page): Promise<void> {
       window.scrollBy(0, distance);
     }, stepSize);
 
-    await randomDelay(300, 800);
+    await randomDelay(200, 500);
   }
 
   await page.evaluate(() => {
