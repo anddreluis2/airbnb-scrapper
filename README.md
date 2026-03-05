@@ -18,6 +18,7 @@ npm start
 | `build` | `tsc` | Compila TypeScript para `dist/` |
 | `start` | `node dist/index.js` | Executa o scraper |
 | `dev` | `tsc && node dist/index.js` | Build + execução |
+| `mapa` | `node scripts/generate-map.js` | Gera `data/mapa.html` com os pontos no mapa |
 | `clean` | `rm -rf dist` | Remove build |
 
 ## Variáveis de Ambiente
@@ -25,12 +26,14 @@ npm start
 | Variável | Default | Descrição |
 |----------|---------|-----------|
 | `PROXY_URL` | — | URL do proxy (opcional) |
-| `MAX_PAGES` | 5 | Máximo de páginas de busca |
-| `DELAY_MIN` | 4000 | Delay mínimo entre páginas (ms) |
-| `DELAY_MAX` | 8000 | Delay máximo entre páginas (ms) |
-| `LISTING_DELAY_MIN` | 3000 | Delay mínimo entre listings (ms) |
-| `LISTING_DELAY_MAX` | 6000 | Delay máximo entre listings (ms) |
-| `MAX_RETRIES` | 3 | Tentativas de retry por listing |
+| `MAX_PAGES` | 50 | Máximo de páginas de busca por segmento |
+| `DELAY_MIN` | 2000 | Delay mínimo entre páginas (ms) |
+| `DELAY_MAX` | 4000 | Delay máximo entre páginas (ms) |
+| `LISTING_DELAY_MIN` | 2000 | Delay mínimo entre listings (ms) |
+| `LISTING_DELAY_MAX` | 4000 | Delay máximo entre listings (ms) |
+| `MAX_RETRIES` | 5 | Tentativas de retry por listing |
+| `NAVIGATION_TIMEOUT` | 180000 | Timeout de navegação (ms), evita "Timeout exceeded" |
+| `NAVIGATION_RETRIES` | 3 | Retries antes de desistir de uma página |
 | `OUTPUT_FILE` | `data/listings.csv` | Arquivo de saída |
 
 ## Estrutura do Projeto
@@ -101,8 +104,18 @@ flowchart TD
 O scraper gera `data/listings.csv` com as colunas:
 
 ```
-listing_id, url, titulo, localizacao, coordenadas, coletado_em
+listing_id, url, titulo, localizacao, anfitriao, coordenadas, coletado_em
 ```
+
+### Visualização no mapa
+
+Para ver todos os listings plotados em um mapa interativo:
+
+```bash
+npm run mapa
+```
+
+Abra o arquivo `data/mapa.html` no navegador (duplo clique ou `open data/mapa.html` no macOS). O mapa usa OpenStreetMap, mostra o Centro de Curitiba como referência e cada ponto vermelho é um listing — clique para ver o título.
 
 ## Técnicas Anti-Detecção
 

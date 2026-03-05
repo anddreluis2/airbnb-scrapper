@@ -33,9 +33,9 @@ describe('CONFIG defaults', () => {
   });
 
   it('has timeout values', () => {
-    expect(CONFIG.timeouts.navigation).toBe(90000);
-    expect(CONFIG.timeouts.paginationWait).toBe(20000);
-    expect(CONFIG.timeouts.defaultAction).toBe(120000);
+    expect(CONFIG.timeouts.navigation).toBe(180000);
+    expect(CONFIG.timeouts.paginationWait).toBe(30000);
+    expect(CONFIG.timeouts.defaultAction).toBe(180000);
   });
 
   it('has delay ranges', () => {

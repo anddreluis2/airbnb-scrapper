@@ -160,6 +160,6 @@ describe('computeEffectiveMaxPages', () => {
 
   it('caps at maxPages for moderate count', () => {
     const result = call(scraper, 'computeEffectiveMaxPages', 270) as number;
-    expect(result).toBeLessThanOrEqual(15);
+    expect(result).toBeLessThanOrEqual(50);
   });
 });
